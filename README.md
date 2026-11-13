@@ -1,311 +1,729 @@
 # ESP32 Tailscale Wake-on-LAN Bridge
 
-Wake up a PC on your home network from anywhere through Tailscale, using an
-ESP32 as a small always-on Wake-on-LAN bridge.
+A guide to installing, configuring, building, flashing, and operating
+the ESP32 Tailscale Wake-on-LAN Bridge on **Windows or Linux**.
 
-```text
-[You, anywhere] --Tailscale--> [ESP32 on LAN] --UDP broadcast--> [Sleeping PC]
+## 1. Required Hardware
+
+-   ESP32-WROOM-32 development board.
+-   USB data cable.
+-   Windows 10/11 or a supported Linux distribution.
+-   Wi-Fi router.
+-   Target PC connected to the router through Ethernet.
+-   iPhone or another remote device with Tailscale installed.
+
+The ESP32 must remain powered on to receive remote wake commands.
+
+## 2. Download Required Software and Drivers
+
+  ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  Software                Windows                                                                           Linux
+  ----------------------- --------------------------------------------------------------------------------- --------------------------------------------------------------------------------------------------------
+  ESP-IDF 5.5.3           [Espressif download](https://dl.espressif.com/dl/esp-idf/)                        [ESP-IDF Linux
+                                                                                                            setup](https://docs.espressif.com/projects/esp-idf/en/v5.5.3/esp32/get-started/linux-macos-setup.html)
+
+  Git                     [Git for Windows](https://git-scm.com/download/win)                               Install through your package manager
+
+  CP210x USB driver       [Silicon                                                                          Usually supported by the Linux kernel
+                          Labs](https://www.silabs.com/software-and-tools/usb-to-uart-bridge-vcp-drivers)   
+
+  Tailscale               [Windows download](https://tailscale.com/download/windows)                        [Linux installation](https://tailscale.com/download/linux)
+
+  Tailscale for iPhone    [Tailscale downloads](https://tailscale.com/download)                             Not applicable
+  ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+### Python
+
+ESP-IDF requires Python and several Python packages.
+
+-   **Windows:** The ESP-IDF installer provides a managed Python
+    environment.
+-   **Linux:** The ESP-IDF installation script creates a Python virtual
+    environment.
+
+Use the Python environment installed by ESP-IDF when running ESP-IDF
+commands. Avoid mixing ESP-IDF dependencies with unrelated Python
+installations.
+
+## 3. Install the ESP32 USB Driver
+
+### Windows
+
+For an ESP32 board using CP2102:
+
+1.  Download the CP210x Windows VCP driver.
+2.  Extract the ZIP file if necessary.
+3.  Run the Windows 64-bit installer.
+4.  Complete the installation.
+5.  Connect the ESP32 using a USB data cable.
+6.  Open Device Manager.
+7.  Expand **Ports (COM & LPT)**.
+8.  Find **Silicon Labs CP210x USB to UART Bridge**.
+9.  Record the assigned COM port, for example `COM3`.
+
+If the board uses CH340 instead of CP2102, install the corresponding WCH
+driver.
+
+### Linux
+
+Most modern Linux distributions include drivers for CP210x and CH340
+USB-to-serial adapters.
+
+Connect the ESP32 and check the serial devices:
+
+``` bash
+ls /dev/ttyUSB*
+ls /dev/ttyACM*
 ```
 
-The ESP32 joins your tailnet, listens for a UDP trigger, and broadcasts a WoL
-magic packet on your local network.
+The ESP32 may appear as `/dev/ttyUSB0` or `/dev/ttyACM0`.
 
-## How It Works
+Check the USB device:
 
-1. The ESP32 boots, connects to WiFi, and registers with Tailscale.
-2. The firmware keeps a UDP listener open on port `9999` by default.
-3. Any allowed Tailscale peer sends a wake trigger to the ESP32.
-4. The ESP32 broadcasts a WoL magic packet on the LAN.
-5. The target PC's Ethernet NIC receives the packet and powers on.
+``` bash
+lsusb
+```
 
-## Hardware
+If the serial device exists but permission is denied, add your user to
+the `dialout` group:
 
-Any standard ESP32 dev board should work. The project is tuned for a classic
-ESP32 without PSRAM, such as a NodeMCU-32S / ESP32S.
+``` bash
+sudo usermod -aG dialout "$USER"
+```
 
-WoL requires the target PC to be connected by Ethernet. Most WiFi NICs do not
-support Wake-on-LAN magic packets.
+Log out and log back in, or restart the computer. Check group membership
+with:
 
-## Quick Start: Windows PowerShell
+``` bash
+groups
+```
 
-Windows users should use the native PowerShell setup script. It checks for
-ESP-IDF, installs Espressif EIM CLI with `winget` when possible, installs the
-preferred ESP-IDF version, prompts for project settings, builds, and flashes.
+Do not use `sudo idf.py` as a routine workaround for serial permissions.
 
-```powershell
-git clone https://github.com/kmscarpio/esp32-tailscale-wake-on-lan-bridge.git
+## 4. Install ESP-IDF 5.5.3
+
+Use ESP-IDF v5.5.3 to match the tested project environment.
+
+### Windows installation
+
+1.  Download the Windows ESP-IDF installer from Espressif.
+2.  Choose ESP-IDF version 5.5.3.
+3.  Select the ESP32 target and required toolchain.
+4.  Install the managed Python environment.
+5.  Install Git, CMake, Ninja, and the required compiler tools.
+6.  Allow the installer to complete.
+
+An example installation directory is:
+
+``` text
+C:\esp
+```
+
+Open the generated ESP-IDF PowerShell environment shortcut and verify:
+
+``` powershell
+idf.py --version
+```
+
+Expected version:
+
+``` text
+ESP-IDF v5.5.3
+```
+
+### Linux installation
+
+The following example uses Ubuntu or another Debian-based distribution.
+
+Install dependencies:
+
+``` bash
+sudo apt update
+
+sudo apt install -y \
+  git \
+  wget \
+  flex \
+  bison \
+  gperf \
+  python3 \
+  python3-pip \
+  python3-venv \
+  cmake \
+  ninja-build \
+  ccache \
+  libffi-dev \
+  libssl-dev \
+  dfu-util \
+  libusb-1.0-0
+```
+
+Create the ESP-IDF directory:
+
+``` bash
+mkdir -p ~/esp
+cd ~/esp
+```
+
+Clone ESP-IDF v5.5.3:
+
+``` bash
+git clone --recursive \
+  --branch v5.5.3 \
+  https://github.com/espressif/esp-idf.git
+```
+
+Install the ESP32 toolchain and Python environment:
+
+``` bash
+cd ~/esp/esp-idf
+./install.sh esp32
+```
+
+Activate the environment:
+
+``` bash
+. ./export.sh
+```
+
+Verify:
+
+``` bash
+idf.py --version
+```
+
+Expected version:
+
+``` text
+ESP-IDF v5.5.3
+```
+
+Run `. ~/esp/esp-idf/export.sh` in every new terminal session before
+using ESP-IDF commands.
+
+## 5. Download the ESP32 Project
+
+Open PowerShell on Windows or Terminal on Linux.
+
+Clone the repository:
+
+``` bash
+git clone --recursive \
+  https://github.com/kmscarpio/esp32-tailscale-wake-on-lan-bridge.git
+```
+
+Enter the project directory:
+
+``` bash
 cd esp32-tailscale-wake-on-lan-bridge
-.\scripts\setup.ps1
 ```
 
-The script uses Windows COM ports, such as `COM3`, and lists detected serial
-ports when possible.
+Alternatively, download the repository ZIP from GitHub and extract it.
 
-If Windows blocks script execution, run this once in the same PowerShell window:
+Make sure the project contains its original files, including:
 
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\scripts\setup.ps1
+-   `CMakeLists.txt`
+-   `main` directory
+-   `sdkconfig.defaults`, if provided
+-   Other project files and components
+
+Do not remove existing project files.
+
+## 6. Configure the ESP32
+
+Open the ESP-IDF environment and navigate to the project directory.
+
+Example Windows path:
+
+``` powershell
+cd C:\ESP32\esp32-tailscale-wake-on-lan-bridge
 ```
 
-The Windows setup uses Espressif's official installer tooling instead of a
-custom GUI. Espressif documents the Windows installer and PowerShell/CMD
-environment flow here:
+Example Linux path:
 
-https://docs.espressif.com/projects/esp-idf/en/stable/esp32/get-started/windows-setup.html
-
-## Quick Start: Linux
-
-Linux users should use the Bash setup script:
-
-```bash
-git clone https://github.com/kmscarpio/esp32-tailscale-wake-on-lan-bridge.git
-cd esp32-tailscale-wake-on-lan-bridge
-bash scripts/setup.sh
+``` bash
+cd ~/esp/esp32-tailscale-wake-on-lan-bridge
+. ~/esp/esp-idf/export.sh
 ```
 
-The Linux script looks for ESP-IDF `v5.5.3` under one of these locations:
+Set the target:
 
-```text
-$IDF_PATH
-~/esp/esp-idf
-~/esp-idf
-/opt/esp-idf
+``` bash
+idf.py set-target esp32
 ```
 
-If ESP-IDF is missing, the script can clone it from Espressif's upstream source,
-checkout `v5.5.3`, run `./install.sh esp32`, and continue. On supported Linux
-distributions it can also install common prerequisites with `apt-get`, `dnf`,
-`pacman`, or `zypper`.
+Open the configuration menu:
 
-To choose a different ESP-IDF install location:
-
-```bash
-IDF_INSTALL_DIR="$HOME/tools/esp-idf" bash scripts/setup.sh
-```
-
-It uses `/dev/ttyUSB0` as the default serial port.
-
-## Configuration
-
-Both setup scripts prompt for the same firmware settings:
-
-| Setting | Default | Description |
-| --- | --- | --- |
-| `WOL_WIFI_SSID` | none | WiFi network name |
-| `WOL_WIFI_PASSWORD` | none | WiFi password |
-| `WOL_TAILSCALE_AUTH_KEY` | none | Tailscale auth key |
-| `WOL_TARGET_MAC` | none | Target PC Ethernet MAC, such as `AA:BB:CC:DD:EE:FF` |
-| `WOL_DEVICE_NAME` | `esp32-wol` | Tailscale device name |
-| `WOL_LISTEN_PORT` | `9999` | UDP trigger port |
-| `WOL_BROADCAST_IP` | `255.255.255.255` | LAN broadcast address (strict `a.b.c.d`) |
-| `WOL_AUTH_TOKEN` | generated by setup script | Shared secret required in every trigger (12-64 chars) |
-| `WOL_ALLOWED_SRC_IPS` | empty (any peer) | Comma-separated Tailscale IPs allowed to trigger (max 8) |
-| `WOL_COOLDOWN_SECONDS` | `10` | Minimum seconds between magic packets |
-| `WOL_DISCONNECT_RESTART_MIN` | `15` | Reboot if Tailscale is down this long (0 = never) |
-| `WOL_MIN_FREE_BLOCK_BYTES` | `4096` | Reboot if the largest free heap block stays below this (0 = off) |
-
-The firmware **refuses to start** with neither a token nor an allow-list unless you
-explicitly enable `WOL_ALLOW_UNAUTHENTICATED`.
-
-You can also change these later with:
-
-```bash
+``` bash
 idf.py menuconfig
 ```
 
-Open `Wake-on-LAN Configuration` in menuconfig.
+Configure the options actually provided by the firmware.
 
-## Wake Your PC
+### Wi-Fi
 
-After flashing, open the serial monitor to find the ESP32's Tailscale IP.
+-   Wi-Fi SSID
+-   Wi-Fi password
 
-Linux:
+### Tailscale
 
-```bash
-idf.py monitor -p /dev/ttyUSB0
+-   Device name
+-   Tailscale authentication configuration, if required by the firmware
+-   Network settings
+
+### Wake-on-LAN
+
+-   Target PC MAC address
+-   LAN broadcast address
+-   WOL destination UDP port, normally 9
+
+### UDP command service
+
+-   Listening port, normally 9999
+-   Authentication token
+-   Authorized source Tailscale IP addresses
+
+### Reliability
+
+-   Reconnection intervals
+-   Watchdog settings
+-   Memory thresholds
+-   Command rate limits
+
+Do not enable unauthenticated UDP access. Do not publish Wi-Fi
+passwords, authentication keys, or command tokens.
+
+Save the configuration and exit `menuconfig`.
+
+## 7. Build the Firmware
+
+Run:
+
+``` bash
+idf.py build
 ```
 
-Windows:
+A successful build should display:
 
-```powershell
-idf.py monitor -p COM3
+``` text
+Project build complete.
 ```
 
-Then send a UDP trigger from an allowed Tailscale peer. The payload is `wake <token>`:
+The generated firmware files will be placed inside the project's `build`
+directory. Resolve build errors before flashing.
 
-```bash
-echo "wake <token>" | nc -u <esp32-tailscale-ip> 9999 -w1
+## 8. Flash the ESP32
+
+Connect the ESP32 through USB and identify its serial port.
+
+### Windows
+
+``` powershell
+idf.py -p COM3 flash
 ```
 
-(If you deliberately configured no token, the payload is just `wake`.) Invalid triggers
-get no reply; only a valid one is acknowledged with `ok`.
+Replace `COM3` with the actual port.
 
-The Linux setup script also installs `scripts/wake-pc` to `~/.local/bin` and stores the
-token in `~/.config/wake-pc/token` (mode 600). The token is read from there or from the
-`WAKE_PC_TOKEN` environment variable, never from a command-line flag:
+### Linux
 
-```bash
-wake-pc --save <esp32-tailscale-ip>
-wake-pc
+``` bash
+idf.py -p /dev/ttyUSB0 flash
 ```
 
-## Target PC Setup
+Replace `/dev/ttyUSB0` with the actual serial device.
 
-In BIOS/UEFI:
+If the ESP32 does not enter download mode automatically:
 
-- Enable Wake on LAN.
-- Disable ErP/EuP Ready if it cuts standby power to the NIC.
+1.  Hold the BOOT button.
+2.  Press and release EN or RESET.
+3.  Release BOOT.
+4.  Retry flashing.
 
-On Windows:
+Wait for the flash process to complete.
 
-- Open Device Manager.
-- Open the Ethernet adapter properties.
-- Enable `Allow this device to wake the computer`.
-- Enable Wake-on-LAN or Magic Packet options if your driver exposes them.
+## 9. Open the Serial Monitor
 
-On Linux:
+### Windows
 
-```bash
-sudo ethtool -s eth0 wol g
+``` powershell
+idf.py -p COM3 monitor
 ```
 
-## 3D Printed Enclosure
+### Linux
 
-This repo includes a parametric CadQuery enclosure for the NodeMCU-32S /
-ESP32S-style board:
-
-```bash
-pip install cadquery
-python cad/esp32_enclosure.py
+``` bash
+idf.py -p /dev/ttyUSB0 monitor
 ```
 
-Generated STEP files are written to `cad/out/`:
+Check the startup logs and verify that:
 
-- `esp32_enclosure_base.step`
-- `esp32_enclosure_lid.step`
-- `esp32_enclosure_assembly.step`
+-   ESP32 boots successfully.
+-   Wi-Fi connects.
+-   Tailscale initializes and connects.
+-   UDP listener starts.
+-   Firmware configuration is valid.
 
-Open the assembly STEP in Fusion 360 to inspect or modify the design. The CAD
-script keeps board dimensions, clearances, wall thickness, screw sizing, USB
-cutout size, vents, and label text as editable parameters near the top of the
-file.
+Exit the serial monitor with `Ctrl + ]`.
 
-## Troubleshooting
+## 10. Configure the Target PC for Wake-on-LAN
 
-### Bash reports `$'\r': command not found`
+The target PC must support Wake-on-LAN from its intended power state.
 
-The Bash script has Windows CRLF line endings. This repo includes
-`.gitattributes` to keep `.sh` files as LF. Re-checkout the repo or run:
+### BIOS/UEFI
 
-```bash
-dos2unix scripts/setup.sh scripts/wake-pc
+Enter BIOS and check for settings such as:
+
+-   Wake on LAN
+-   Power On By PCI-E
+-   Resume by LAN
+-   ErP
+
+Enable the relevant Wake-on-LAN option. Disable ErP if it removes
+standby power from the Ethernet adapter. Save and restart.
+
+### Windows target PC
+
+1.  Open Device Manager.
+2.  Expand **Network adapters**.
+3.  Open the Ethernet adapter properties.
+4.  Open **Power Management**.
+5.  Enable **Allow this device to wake the computer**.
+6.  Enable **Only allow a magic packet to wake the computer**.
+
+Under **Advanced**, enable available settings corresponding to:
+
+-   Wake on Magic Packet
+-   Shutdown Wake-on-LAN, if supported
+-   Wake from shutdown, if supported
+
+For troubleshooting, disable Windows Fast Startup if shutdown WOL does
+not work.
+
+### Linux target PC
+
+Install `ethtool` on Ubuntu or Debian:
+
+``` bash
+sudo apt update
+sudo apt install ethtool
 ```
 
-On Windows PowerShell, prefer:
+Find the Ethernet interface:
 
-```powershell
-.\scripts\setup.ps1
+``` bash
+ip -br link
 ```
 
-### `idf.py` is not found on Windows
+Example interface: `enp3s0`.
 
-Run the Windows setup script first:
+Check Wake-on-LAN support:
 
-```powershell
-.\scripts\setup.ps1
+``` bash
+sudo ethtool enp3s0
 ```
 
-It will try to install Espressif EIM CLI with `winget` and install ESP-IDF
-`v5.5.3`. If ESP-IDF was just installed and `idf.py` is still missing, open a
-new PowerShell window and run the setup script again.
+Look for `Supports Wake-on` containing `g`. The `g` option indicates
+magic-packet support.
 
-### Build fails in ESP-IDF `mbedtls`
+Enable magic-packet wake:
 
-If the error mentions `mbedcrypto` not being built, the ESP-IDF checkout or
-tools install is likely incomplete or stale. Repair ESP-IDF:
-
-```powershell
-cd $env:IDF_PATH
-git submodule update --init --recursive
-.\install.ps1
-. .\export.ps1
+``` bash
+sudo ethtool -s enp3s0 wol g
 ```
 
-Then rerun:
+Verify:
 
-```powershell
-.\scripts\setup.ps1
+``` bash
+sudo ethtool enp3s0
 ```
 
-On Linux:
+Look for:
 
-```bash
-cd "$IDF_PATH"
-git submodule update --init --recursive
-./install.sh esp32
-source ./export.sh
-bash scripts/setup.sh
+``` text
+Wake-on: g
 ```
 
-### No COM port is detected on Windows
+Replace `enp3s0` with the actual Ethernet interface.
 
-Reconnect the ESP32, try another USB cable, and check Device Manager. Some
-boards need a CP210x or CH340 USB-to-serial driver. You can still type the COM
-port manually, such as `COM3`.
+#### Make Linux Wake-on-LAN persistent
 
-### Stale `sdkconfig`
+The `ethtool` setting may reset after a reboot or network-interface
+reinitialization. On a systemd-based distribution, create a service:
 
-Both setup scripts remove `sdkconfig` and `sdkconfig.old` before building so the
-temporary guided configuration is applied cleanly.
-
-## Security
-
-- **The firmware does not enforce Tailscale ACL port rules.** Tailscale enforces ACLs on
-  the receiving node from the packet filter in the netmap, and this lightweight client
-  does not implement that filter. ACLs still decide which peers are *visible* to the
-  ESP32, but any visible peer can reach the trigger port. That is why the firmware has its
-  own source allow-list and token.
-- Recommended ACL (limits who is visible to the device; adjust names):
-
-  ```json
-  {
-    "tagOwners": { "tag:wol-bridge": ["autogroup:admin"] },
-    "acls": [
-      { "action": "accept", "src": ["you@example.com"], "dst": ["tag:wol-bridge:9999"], "proto": "udp" }
-    ]
-  }
-  ```
-
-  Create the auth key with `tag:wol-bridge` pre-applied. Do not grant the tag any `src` rights.
-- Secrets (WiFi password, auth key, token) are compiled into the firmware and stored in
-  plaintext flash, and `sdkconfig` / `build/` hold them on your PC. Anyone with USB access
-  to the ESP32 can read them. For a hardened deployment enable ESP-IDF flash encryption,
-  NVS encryption and secure boot (this also protects the Tailscale machine key in NVS).
-- The WiFi station refuses to connect below WPA2 (open networks only if you set an empty password).
-- DERP relay TLS certificates are verified (`CONFIG_TS_DERP_VERIFY_CERT`).
-- The listener is bound to the Tailscale interface only; it is not exposed on your LAN.
-
-## Tests
-
-Host-side unit tests for the security-critical logic (MAC/IP parsing, token check,
-allow-list, cooldown, packet builder), built with AddressSanitizer/UBSan:
-
-```bash
-make -C tests/host
+``` bash
+sudo nano /etc/systemd/system/wol-enable.service
 ```
 
-## Known Limitations
+Add:
 
-- DERP-only connectivity is expected for many home networks.
-- One ESP32 wakes one configured target MAC.
-- Port-level Tailscale ACLs are not enforced on-device; see Security above.
-- `CONFIG_TS_MAX_PEERS` is not honoured by the vendored library (hard-coded to 16 in `ts.h`);
-  peers beyond the library limit are skipped, so keep the visible peer set small.
-- The Tailscale state machine is not thread-safe; `ts_update()` must only be called from
-  one task (this firmware does that), and `ts_udp_send()` is still called from the WoL task.
-- The no-PSRAM ESP32 heap is tight; reduce `CONFIG_TS_COORD_BUFFER_SIZE_KB` if needed.
+``` ini
+[Unit]
+Description=Enable Wake-on-LAN
+After=network.target
 
-## License
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ethtool -s enp3s0 wol g
+RemainAfterExit=yes
 
-MIT
+[Install]
+WantedBy=multi-user.target
+```
+
+Check the `ethtool` executable path:
+
+``` bash
+command -v ethtool
+```
+
+If it differs from `/usr/sbin/ethtool`, update `ExecStart`. Replace
+`enp3s0` with the actual Ethernet interface.
+
+Enable the service:
+
+``` bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now wol-enable.service
+```
+
+Check its status:
+
+``` bash
+systemctl status wol-enable.service
+```
+
+After restarting Linux, verify:
+
+``` bash
+sudo ethtool enp3s0
+```
+
+BIOS support, Ethernet adapter support, motherboard standby power, and
+Linux driver behavior determine whether Wake-on-LAN works from sleep or
+full shutdown. Test each power state separately.
+
+## 11. Install and Configure Tailscale
+
+Install Tailscale on:
+
+-   The target PC.
+-   The iPhone or other remote device.
+
+Use the official Tailscale installation instructions for each operating
+system. Sign in using the same Tailscale account or tailnet.
+
+The ESP32 must also be authenticated and connected through the
+firmware's Tailscale implementation.
+
+Record the Tailscale IP addresses of the ESP32 and authorized remote
+devices.
+
+### Windows target PC: Run unattended
+
+1.  Find the Tailscale icon in the system tray.
+2.  Right-click the icon.
+3.  Hover over **Preferences**.
+4.  Select **Run unattended**.
+5.  Select Yes when prompted.
+
+A check mark should appear next to Run unattended. This enables
+Tailscale to continue running as a Windows service without requiring a
+user to sign in.
+
+Verify by restarting Windows and checking whether the PC appears online
+before signing in.
+
+### Linux target PC
+
+Enable the Tailscale service:
+
+``` bash
+sudo systemctl enable --now tailscaled
+```
+
+Connect the machine to your tailnet:
+
+``` bash
+sudo tailscale up
+```
+
+Complete authentication using the displayed login URL.
+
+Check the service:
+
+``` bash
+systemctl status tailscaled
+```
+
+Check the Tailscale connection:
+
+``` bash
+tailscale status
+```
+
+Check the device's Tailscale IP:
+
+``` bash
+tailscale ip -4
+```
+
+The `tailscaled` service should start automatically after reboot. For
+unattended operation, review the device's key-expiry settings in the
+Tailscale admin console.
+
+## 12. Test Local Wake-on-LAN
+
+Before testing remote access, test the ESP32 while the remote device is
+connected to the home Wi-Fi.
+
+Open your UDP Sender application.
+
+  Setting            Value
+  ------------------ -----------------------------------------
+  Protocol           UDP
+  Destination        ESP32 Tailscale IP or configured LAN IP
+  Destination port   9999
+  Encoding           UTF-8
+  Listening port     9999
+
+Use the actual command syntax configured in the firmware.
+
+Test:
+
+``` text
+status YOUR_TOKEN
+```
+
+The expected response should indicate that the ESP32, Wi-Fi, and
+Tailscale are operational.
+
+Then test:
+
+``` text
+wake YOUR_TOKEN
+```
+
+Verify that the target PC wakes.
+
+## 13. Test Remote Wake-on-LAN
+
+Leave the ESP32 connected to Wi-Fi and powered by a USB wall adapter.
+The ESP32 does not need to remain connected to the development computer.
+
+On your iPhone or remote device:
+
+1.  Open Tailscale.
+2.  Confirm the ESP32 is online.
+3.  Open UDP Sender.
+4.  Configure the ESP32's Tailscale IP.
+5.  Set destination port to 9999.
+6.  Set the listening port to 9999.
+7.  Send the status command.
+
+Example:
+
+``` text
+status YOUR_TOKEN
+```
+
+Verify that the ESP32 returns a response.
+
+Then send:
+
+``` text
+wake YOUR_TOKEN
+```
+
+The ESP32 should transmit a WOL magic packet to the target PC. Wait for
+the target operating system to boot and reconnect to Tailscale.
+
+## 14. Final Operating Architecture
+
+``` text
+                 iPhone
+                   |
+                Tailscale
+                   |
+              ESP32-WROOM-32
+                   |
+                  Wi-Fi
+                   |
+               Home Router
+                   |
+              LAN Broadcast
+                   |
+                Target PC
+                   |
+              Windows / Linux
+                   |
+              Tailscale Service
+                   |
+              PC Online Again
+```
+
+## 15. Final Verification Checklist
+
+### ESP32
+
+-   [ ] Firmware builds successfully.
+-   [ ] Firmware flashes successfully.
+-   [ ] Wi-Fi connects automatically.
+-   [ ] Tailscale connects automatically.
+-   [ ] UDP listener starts.
+-   [ ] Authentication works.
+-   [ ] Status command returns diagnostics.
+-   [ ] Wake command sends a magic packet.
+-   [ ] ESP32 reconnects after a power interruption.
+
+### Target PC
+
+-   [ ] BIOS Wake-on-LAN enabled.
+-   [ ] Ethernet adapter configured for magic packets.
+-   [ ] Sleep WOL tested.
+-   [ ] Full shutdown WOL tested.
+-   [ ] Tailscale installed.
+-   [ ] Automatic Tailscale startup configured.
+-   [ ] Windows Run unattended enabled, if using Windows.
+-   [ ] Linux `tailscaled` service enabled, if using Linux.
+-   [ ] Tailscale reconnects after reboot.
+
+### Remote Access
+
+-   [ ] Remote device Tailscale connected.
+-   [ ] ESP32 reachable remotely.
+-   [ ] Remote status command works.
+-   [ ] Remote wake command works.
+-   [ ] Target PC powers on.
+-   [ ] Target PC reconnects to Tailscale automatically.
+
+## 16. Important Notes
+
+-   Keep the ESP32 powered continuously.
+-   Use a stable USB power supply.
+-   Do not expose the UDP listener directly to the public internet.
+-   Keep authentication enabled.
+-   Keep the original project structure when applying patches.
+-   A successful UDP response does not prove that the PC received the
+    WOL packet.
+-   A successful WOL transmission does not prove that the target
+    operating system's Tailscale service has reconnected.
+-   Test sleep and full shutdown separately.
+-   Run unattended is a Windows Tailscale setting, not an ESP32 setting.
+-   Linux uses its systemd service to keep Tailscale running
+    automatically.
+-   ESP-IDF build and flashing commands are substantially the same on
+    Windows and Linux, but serial port names and environment activation
+    differ.
+
+## Official References
+
+-   [ESP-IDF downloads](https://dl.espressif.com/dl/esp-idf/)
+-   [ESP-IDF v5.5.3 Linux
+    setup](https://docs.espressif.com/projects/esp-idf/en/v5.5.3/esp32/get-started/linux-macos-setup.html)
+-   [ESP-IDF
+    documentation](https://docs.espressif.com/projects/esp-idf/en/v5.5.3/esp32/)
+-   [Git for Windows](https://git-scm.com/download/win)
+-   [Silicon Labs CP210x
+    drivers](https://www.silabs.com/software-and-tools/usb-to-uart-bridge-vcp-drivers)
+-   [Tailscale downloads](https://tailscale.com/download)
+-   [Tailscale Linux installation](https://tailscale.com/download/linux)
