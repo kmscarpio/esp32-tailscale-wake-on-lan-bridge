@@ -1,0 +1,112 @@
+menu "Wake-on-LAN Configuration"
+
+    config WOL_WIFI_SSID
+        string "WiFi SSID"
+        default "myssid"
+        help
+            SSID of the local WiFi network.
+
+    config WOL_WIFI_PASSWORD
+        string "WiFi Password"
+        default ""
+        help
+            Password for the WiFi network (leave empty for open networks).
+
+    config WOL_TAILSCALE_AUTH_KEY
+        string "Tailscale Auth Key"
+        default "tskey-auth-XXXXXXXXXXXXXXXX-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+        help
+            Auth key from https://login.tailscale.com/admin/settings/keys
+            Recommended: create the key with a tag (e.g. tag:wol-bridge) so the
+            device is not tied to your user account and its node key does not
+            expire, and give it a short key-expiry.
+            NOTE: this value is compiled into the firmware image in plaintext
+            flash. Anyone with physical USB access can read it.
+
+    config WOL_DEVICE_NAME
+        string "Tailscale Device Name"
+        default "esp32-wol"
+        help
+            Name this device will appear as in the Tailscale admin console.
+
+    config WOL_TARGET_MAC
+        string "Target PC MAC Address"
+        default "AA:BB:CC:DD:EE:FF"
+        help
+            Ethernet MAC address of the NIC to wake (colon-separated hex).
+            On Linux: ip link show   or   cat /sys/class/net/<iface>/address
+            On Windows: ipconfig /all
+
+    config WOL_LISTEN_PORT
+        int "UDP Trigger Port"
+        default 9999
+        range 1024 65535
+        help
+            UDP port to listen on for incoming wake triggers (over Tailscale only).
+            Send "wake <token>" (or just "wake" if no token is configured) to
+            <esp32-tailscale-ip>:<port> to fire WoL.
+            Example: echo "wake <token>" | nc -u <tailscale-ip> 9999 -w1
+
+    config WOL_BROADCAST_IP
+        string "LAN Broadcast IP"
+        default "255.255.255.255"
+        help
+            IP address to broadcast the magic packet to.
+            255.255.255.255 works on most home networks.
+            For a segmented network use the subnet broadcast, e.g. 192.168.1.255.
+            Must be a strict dotted quad (a.b.c.d).
+
+    config WOL_AUTH_TOKEN
+        string "Shared trigger token"
+        default ""
+        help
+            Shared secret that must accompany every trigger ("wake <token>").
+            12-64 printable ASCII characters, no spaces. The setup scripts
+            generate a random 32-hex-character token for you.
+            Leave empty only if you rely on the source allow-list below.
+
+    config WOL_ALLOWED_SRC_IPS
+        string "Allowed source Tailscale IPs (comma separated)"
+        default ""
+        help
+            Only triggers whose Tailscale source IP is in this list are
+            accepted, e.g. "100.101.102.103,100.101.102.104" (max 8).
+            IMPORTANT: this firmware does not enforce Tailscale ACL port
+            rules itself, so this list (plus the token) is the real
+            port-level access control. Tailnet ACLs still decide which peers
+            are visible to this device at all.
+
+    config WOL_ALLOW_UNAUTHENTICATED
+        bool "Allow triggers from any tailnet peer without token/allow-list"
+        default n
+        help
+            If both the token and the allow-list are empty the firmware
+            refuses to start listening, unless this is enabled.
+            Enabling it means ANY peer that can reach this device can wake
+            the PC. Not recommended.
+
+    config WOL_COOLDOWN_SECONDS
+        int "Minimum seconds between magic packets"
+        default 10
+        range 0 3600
+        help
+            Additional valid triggers inside this window are acknowledged
+            but do not send another magic packet. 0 disables the limit.
+
+    config WOL_DISCONNECT_RESTART_MIN
+        int "Reboot if Tailscale is down for this many minutes (0 = never)"
+        default 15
+        range 0 1440
+        help
+            Self-healing for permanent WiFi/Tailscale/heap faults.
+
+    config WOL_MIN_FREE_BLOCK_BYTES
+        int "Reboot if the largest free heap block stays below this (bytes, 0 = off)"
+        default 4096
+        range 0 65536
+        help
+            Heap-exhaustion guard. Must be below the value you normally see in
+            the periodic "heap" log line. Checked once per second; the reboot
+            happens after 60 consecutive low readings.
+
+endmenu

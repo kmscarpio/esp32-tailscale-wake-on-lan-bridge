@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""
+wake-pc — Wake your PC via the ESP32 Tailscale WoL bridge.
+
+Sends UDP triggers every second until the ESP32 confirms with an ACK ("ok"),
+then exits immediately. Worst-case wait: ~25 s (one full reconnect cycle).
+
+Usage:
+  wake-pc                              # uses saved default IP
+  wake-pc <esp32-tailscale-ip>         # specify IP explicitly
+  wake-pc --save 100.126.x.x          # save a default IP for next time
+  wake-pc --timeout 30                 # custom timeout
+
+The trigger token is read (first match wins) from:
+  1. the WAKE_PC_TOKEN environment variable
+  2. ~/.config/wake-pc/token   (created by the setup script, mode 600)
+It is deliberately NOT a command-line flag, so it never shows up in `ps` or shell history.
+
+The ESP32 Tailscale IP is shown in the serial monitor banner after boot,
+and in the Tailscale admin console under the device name "esp32-wol".
+"""
+
+import os
+import socket
+import sys
+import time
+import argparse
+import ipaddress
+import stat
+
+CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".config", "wake-pc")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "default-ip")
+TOKEN_FILE = os.path.join(CONFIG_DIR, "token")
+
+
+def load_token():
+    """Return the trigger token ('' if none configured)."""
+    env = os.environ.get("WAKE_PC_TOKEN", "").strip()
+    if env:
+        return env
+    try:
+        st = os.stat(TOKEN_FILE)
+        if os.name == "posix" and (st.st_mode & (stat.S_IRWXG | stat.S_IRWXO)):
+            print(f"Warning: {TOKEN_FILE} is accessible by other users; run: chmod 600 {TOKEN_FILE}",
+                  file=sys.stderr)
+        with open(TOKEN_FILE) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return ""
+
+
+def validate_ip(value):
+    try:
+        return str(ipaddress.IPv4Address(value))
+    except ValueError:
+        sys.exit(f"Invalid IPv4 address: {value!r}")
+
+
+def load_default_ip():
+    try:
+        with open(CONFIG_FILE) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return None
+
+
+def save_default_ip(ip):
+    ip = validate_ip(ip)
+    os.makedirs(CONFIG_DIR, mode=0o700, exist_ok=True)
+    with open(CONFIG_FILE, "w") as f:
+        f.write(ip + "\n")
+    print(f"Saved default IP: {ip}")
+    print(f"  (stored in {CONFIG_FILE})")
+
+
+def main():
+    default_ip = load_default_ip()
+
+    parser = argparse.ArgumentParser(
+        description="Wake PC via ESP32 Tailscale WoL bridge",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+examples:
+  wake-pc 100.126.x.x          # wake using this IP
+  wake-pc                       # wake using saved default IP
+  wake-pc --save 100.126.x.x   # save default IP for future use
+        """
+    )
+    parser.add_argument(
+        "esp32_ip", nargs="?", default=default_ip,
+        help="ESP32 Tailscale VPN IP"
+             + (f" (default: {default_ip})" if default_ip else " (required on first use)")
+    )
+    parser.add_argument(
+        "--save", metavar="IP", dest="save_ip",
+        help="Save a default ESP32 IP for future use"
+    )
+    parser.add_argument(
+        "--port", type=int, default=9999,
+        help="UDP listen port configured on ESP32 (default: 9999)"
+    )
+    parser.add_argument(
+        "--timeout", type=int, default=25,
+        help="Max seconds to wait for ACK (default: 25 — one full reconnect cycle)"
+    )
+    args = parser.parse_args()
+
+    if args.save_ip:
+        save_default_ip(args.save_ip)
+        if not args.esp32_ip:
+            args.esp32_ip = args.save_ip
+
+    if args.esp32_ip:
+        args.esp32_ip = validate_ip(args.esp32_ip)
+    if not 1 <= args.port <= 65535:
+        parser.error("--port must be 1-65535")
+
+    if not args.esp32_ip:
+        parser.error(
+            "ESP32 IP required. Provide it as an argument or save a default:\n"
+            "  wake-pc 100.126.x.x          # one-time use\n"
+            "  wake-pc --save 100.126.x.x   # save for future"
+        )
+
+    token = load_token()
+    if any(c.isspace() for c in token):
+        sys.exit("Token must not contain whitespace.")
+    payload = b"wake " + token.encode() if token else b"wake"
+    if not token:
+        print("Note: no token configured; this only works if the ESP32 allows token-less triggers.",
+              file=sys.stderr)
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(1.0)  # wait up to 1 s for ACK after each send
+
+    print(f"Waking PC via ESP32 ({args.esp32_ip}:{args.port}) ...")
+
+    deadline = time.time() + args.timeout
+    attempt  = 0
+
+    while time.time() < deadline:
+        attempt += 1
+        try:
+            sock.sendto(payload, (args.esp32_ip, args.port))
+        except OSError as e:
+            print(f"Send error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        try:
+            data, peer = sock.recvfrom(32)
+            # Only trust an ACK that really comes from the device we triggered.
+            if peer[0] == args.esp32_ip and data.strip() == b"ok":
+                print(f"Done! ESP32 confirmed (attempt {attempt}).")
+                sock.close()
+                sys.exit(0)
+        except socket.timeout:
+            pass  # no ACK yet — keep sending
+
+    # No ACK within the window. The device drops invalid triggers silently, so this can mean
+    # a wrong token / source IP not in the allow-list, or just a slow DERP return path.
+    sock.close()
+    print(f"Sent {attempt} trigger(s) over {args.timeout} s, but no ACK was received.")
+    print("The PC may still have been woken (ACKs can be lost over DERP). If it was not, check:")
+    print("  - the token matches the one flashed on the ESP32")
+    print("  - this machine's Tailscale IP is in the ESP32's allowed-source list")
+    print("  - the ESP32 is online in the Tailscale admin console")
+    sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

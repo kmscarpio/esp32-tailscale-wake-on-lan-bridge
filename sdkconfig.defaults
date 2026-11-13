@@ -1,0 +1,65 @@
+# sdkconfig.defaults — NodeMCU-32S / ESP32S (no PSRAM)
+# Based on MicroLink examples/ping_pong_esp32/sdkconfig.defaults (original upstream)
+
+# ── TLS / HTTPS (required for Tailscale coordination) ────────────────────────
+CONFIG_ESP_TLS_USING_MBEDTLS=y
+CONFIG_MBEDTLS_SSL_PROTO_TLS1_2=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
+
+# Shrink mbedTLS buffers to reclaim SRAM
+CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN=y
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=4096
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+
+# ── HTTP/2 (Tailscale coordination uses HTTP/2) ───────────────────────────────
+CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=y
+# Note: nghttp2 HTTP/2 support is bundled in esp_http_client on ESP-IDF 5.x
+
+# ── lwIP — reduced buffers for memory-constrained ESP32 ──────────────────────
+CONFIG_LWIP_IPV4=y
+CONFIG_LWIP_DHCP_DOES_ARP_CHECK=n
+CONFIG_LWIP_IP4_FRAG=y
+CONFIG_LWIP_IP4_REASSEMBLY=y
+CONFIG_LWIP_TCP_MSS=1436
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=4096
+CONFIG_LWIP_TCP_WND_DEFAULT=4096
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=6
+CONFIG_LWIP_UDP_RECVMBOX_SIZE=6
+
+# ── Memory ────────────────────────────────────────────────────────────────────
+# No PSRAM on NodeMCU-32S — intentionally NOT setting CONFIG_SPIRAM
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+
+# ── Tailscale — tuned for minimal SRAM usage ─────────────────────────────────
+# 16 KB coord buffer = the library minimum; fine for small tailnets (raise to 24/32 if the
+# netmap no longer fits). Keep the tailnet small / ACL-restricted so few peers are visible.
+CONFIG_TS_COORD_BUFFER_SIZE_KB=16
+# NOTE: lib/tailscale/include/ts.h hard-codes TS_MAX_PEERS=16, so this Kconfig value is
+# currently NOT honoured by the library. Kept for when the library reads it.
+CONFIG_TS_MAX_PEERS=4
+# Verify DERP relay TLS certificates (set to n only to diagnose connectivity problems).
+CONFIG_TS_DERP_VERIFY_CERT=y
+
+# ── WiFi — reduced buffers ────────────────────────────────────────────────────
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_TX_BUFFER_TYPE=1
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
+
+# ── Flash / partition table ───────────────────────────────────────────────────
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# ── Compiler ──────────────────────────────────────────────────────────────────
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_INFO=y
+
+# ── FreeRTOS ─────────────────────────────────────────────────────────────────
+CONFIG_FREERTOS_HZ=1000

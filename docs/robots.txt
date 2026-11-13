@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://kmscarpio.github.io/esp32-tailscale-wake-on-lan-bridge/sitemap.xml

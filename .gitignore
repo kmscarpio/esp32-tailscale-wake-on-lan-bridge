@@ -1,0 +1,17 @@
+# ESP-IDF generated files
+build/
+sdkconfig
+sdkconfig.old
+
+# Logs / serial captures
+*.log
+qrt.txt
+
+# Python
+__pycache__/
+*.pyc
+
+# ESP-IDF dependency lock
+dependencies.lock
+*HISTORY.md
+*PAPER.md
